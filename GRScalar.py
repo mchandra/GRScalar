@@ -71,10 +71,6 @@ class System:
             self.w = np.zeros([self.Nu, self.Nv])
             self.z = np.zeros([self.Nu, self.Nv])
 
-#            print "Setting Initial and boundary data..."
-#            self.set_boundary_conditions()
-#            print "...done."
-
         else:
 
             saved_data = h5py.File(data_file, "r")
@@ -103,170 +99,46 @@ class System:
 
             print "Loaded data file."
 
-    def set_boundary_conditions(self):
-        U = self.U; V = self.V
-        u_i = self.u_i; v_i = self.v_i
-
-        classical_source = self.classical_source
-        phi = self.scalar_field
-
-        alpha = self.alpha
-        FullScalarFieldEvolution = self.FullScalarFieldEvolution
-
-        r = self.r
-        f = self.f
-        g = self.g
-        sigma = self.sigma
-        d = self.d
-        z = self.z
-        w = self.w
-
-        r[0, :] = (V[0, :] - u_i)/2.0
-        r[:, 0] = (v_i - U[:, 0])/2.0
-        g[:, 0] = 1/2.0
-        g[0, :] = 1/2.0
-
-        # Boundary conditions for z
-
-        if FullScalarFieldEvolution == 1:
-
-            tck_phi, fp, ierr, msg = splrep(V[0, :], phi(V[0, :]), k=3, 
-                full_output=True)
-
-            if ierr > 0:
-                print "Error in spline representation used for derivative \
-                    calculation"
-                sys.exit(1)
-
-            z[0, :] = splev(V[0, :], tck_phi, der=1)
-
-        # Boundary conditions for d
-        d[:, 0] = 0.
-
-        if alpha == 0:
-            d[0, :] = classical_source(V[0, :])/r[0, :]
-
-        elif FullScalarFieldEvolution == 0:
-            def dd_dv_v_axis(y, v):
-                r = (v - u_i)/2.
-                return r/alpha*(y[0] - classical_source(v)/r) + y[0]**2
-
-            d[0, :] = odeint(dd_dv_v_axis, d[0, 0], V[0, :], hmax=0.1)[:, 0]
-
-            d_v_axis = interp1d(V[0, :], d[0, :])
-
-        elif FullScalarFieldEvolution == 1:
-            dz_dv_v_axis = splev(V[0, :], tck_phi, der=2)
-
-            d[0, :] = (classical_source(V[0, :]) + alpha*(z[0, :]**2/4. +
-                dz_dv_v_axis/2.))/(r[0, :] + alpha*z[0, :])
-
-            d_v_axis = interp1d(V[0, :], d[0, :])
-
-        # Boundary conditions for sigma
-        sigma[:, 0] = 0.
-
-        def dsigma_dv_v_axis(y, v):
-            if alpha == 0:
-                r = (v - u_i)/2.
-                return classical_source(v)/r
-
-            else:
-                if v < V[0, -1]:
-                    return d_v_axis(v)
-                else:
-                    return d_v_axis(V[0, -1])
-
-        sigma[0, :] = odeint(dsigma_dv_v_axis, sigma[0, 0], V[0, :], hmax=0.1)[:, 0]
-
-        sigma_v_axis = interp1d(V[0, :], sigma[0, :])
-
-        # Boundary conditions for f
-        f[:, 0] = -1/2.
-
-        def df_dv_v_axis(y, v):
-            r = (v - u_i)/2.
-            if v < V[0, -1]:
-                sigma_local = sigma_v_axis(v)
-            else:
-                sigma_local = sigma_v_axis(V[0, -1])
-            return -(y[0]*0.5 + np.exp(2*sigma_local)/4.)/(r*(1 - alpha/r**2))
-
-        f[0, :] = odeint(df_dv_v_axis, f[0, 0], V[0, :], hmax=0.1)[:, 0]
-
-        f_v_axis = interp1d(V[0, :], f[0, :])
-
-        # Boundary conditions for w
-
-        def dw_dv_v_axis(y, v):
-            r = (v - u_i)/2.
-            if v < V[0, -1]:
-                f_local = f_v_axis(v)
-                sigma_local = sigma_v_axis(v)
-            else:
-                f_local = f_v_axis(V[0, -1])
-                sigma_local = sigma_v_axis(V[0, -1])
-            return 2*(f_local*0.5 + np.exp(2*sigma_local)/4.)/(r**2 - alpha)
-
-        w[0, :] = odeint(dw_dv_v_axis, w[0, 0], V[0, :], hmax=0.1)[:, 0]
 
     def dX_du(self, y, u, other_variables, solver):
 
         alpha = self.alpha
-        if solver=='lsoda':
-            r_local = y[0]
+        r = y[0]
 
-        elif solver=='vode':
-            r_local = u[0]
+        f = other_variables[0]
+        g = other_variables[1]
+        sigma = other_variables[2]
 
-        f_local = other_variables[0]
-        g_local = other_variables[1]
-        sigma_local = other_variables[2]
+        dr_du = f
 
+        dd_du = (f*g + np.exp(2*sigma)/4.)*(r**2. - alpha)
 
-        dr_du = f_local
-        dd_du = (f_local*g_local/(r_local**2) + \
-            np.exp(2*sigma_local)/(4*r_local**2))*(1./(1 - alpha/r_local**2))
-        dz_du = 2*(f_local*g_local + np.exp(2*sigma_local)/4.)/(r_local**2 -
-            alpha)
+        dz_du = 2*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
 
         return [dr_du, dd_du, dz_du]
 
     def dX_dv(self, y, v, other_variables, classical_source, solver):
 
         alpha = self.alpha
-        if solver=='lsoda':
-            r_local = y[0]
-            f_local = y[1]
-            g_local = y[2]
-            sigma_local = y[3]
-        elif solver=='vode':
-            r_local = v[0]
-            f_local = v[1]
-            g_local = v[2]
-            sigma_local = v[3]
+        r = y[0]
+        f = y[1]
+        g = y[2]
+        sigma = y[3]
 
-
-        d_local = other_variables[0]
-        z_local = other_variables[1]
+        d = other_variables[0]
+        z = other_variables[1]
+        dz_dv = other_variables[2]
         F = classical_source
 
-        dr_dv = g_local
-        df_dv = (-f_local*g_local/r_local - \
-            np.exp(2*sigma_local)/(4*r_local))*(1/(1 - alpha/r_local**2))
+        dr_dv = g
 
-        if self.FullScalarFieldEvolution:
-            dz_dv_local = other_variables[2]
-            dg_dv = 2*d_local*g_local - F/r_local - alpha*(z_local**2/4. +
-                dz_dv_local/2. - z_local*d_local)/r_local
-        else:
-            dd_dv_local = other_variables[2]
-            dg_dv = 2*d_local*g_local - F/r_local - alpha*(dd_dv_local -
-                d_local**2)/r_local
+        df_dv = (-f*g/r - np.exp(2*sigma)/(4*r))*(1/(1 - alpha/r**2))
 
-        dsigma_dv = d_local
-        dw_dv = 2*(f_local*g_local + np.exp(2*sigma_local)/4.)/(r_local**2 -
-            alpha)
+        dg_dv = 2*d*g - F/r - alpha*(z**2/4. + dz_dv/2. - z*d)/r
+
+        dsigma_dv = d
+
+        dw_dv = 2*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
 
         return [dr_dv, df_dv, dg_dv, dsigma_dv, dw_dv]
 
@@ -285,113 +157,103 @@ class System:
 
         dX_du = self.dX_du; dX_dv = self.dX_dv
 
-        # Restricting to lsoda for now.
-        solver = 'lsoda'
+        for u_coord in xrange(Nu-1):
+            for v_coord in xrange(Nv-1):
 
-        if solver=='lsoda':
+                print "u = ", U[u_coord, v_coord], "v = ", V[u_coord, v_coord]
 
-            for u_coord in xrange(Nu-1):
-                for v_coord in xrange(Nv-1):
+                # Integrate along u
 
-                    print "u = ", U[u_coord, v_coord], "v = ", V[u_coord,
-                        v_coord]
+                r_init = r[u_coord, v_coord + 1]
+                d_init = d[u_coord, v_coord + 1]
+                z_init = z[u_coord, v_coord + 1]
 
-                    # Integrate along u
+                f_init = f[u_coord, v_coord + 1]
+                g_init = g[u_coord, v_coord + 1]
+                sigma_init = sigma[u_coord, v_coord + 1]
 
-                    r_init = r[u_coord, v_coord + 1]
-                    d_init = d[u_coord, v_coord + 1]
-                    z_init = z[u_coord, v_coord + 1]
+                other_variables = [f_init, g_init, sigma_init]
 
-                    f_init = f[u_coord, v_coord + 1]
-                    g_init = g[u_coord, v_coord + 1]
-                    sigma_init = sigma[u_coord, v_coord + 1]
+                u_init = U[u_coord, v_coord + 1]
+                u_final = U[u_coord + 1, v_coord + 1]
 
-                    other_variables = [f_init, g_init, sigma_init]
+                soln_u, info_dict = odeint(dX_du,
+                                           [r_init, d_init, z_init],
+                                           [u_init, u_final],
+                                           args=(other_variables,),
+                                           full_output=True)
 
-                    u_init = U[u_coord, v_coord + 1]
-                    u_final = U[u_coord + 1, v_coord + 1]
-
-                    soln_u, info_dict = odeint(dX_du, [r_init, d_init,
-                        z_init], [u_init, u_final], args=(other_variables,
-                        solver,), full_output=True)
-
-                    if info_dict['message']!='Integration successful.':
-                        print "-"*100
-                        print info_dict
-                        print "-"*100
-                        print "Failed at (u,v) = ", "(", U[u_coord, v_coord +
-                            1], ",", V[u_coord, v_coord + 1], ")"
-                        print "Indices = ", "(", u_coord, ",", v_coord + 1, ")"
-                        if data_dump_filename!=None:
-                            self.save_data(data_dump_filename)
-                        else:
-                            self.save_data("data_dump.hdf5")
-                        sys.exit(1)
-
-                    r[u_coord + 1, v_coord + 1] = soln_u[1][0]
-                    d[u_coord + 1, v_coord + 1] = soln_u[1][1]
-                    z[u_coord + 1, v_coord + 1] = soln_u[1][2]
-
-                    # Integrate along v
-
-                    r_init = r[u_coord + 1, v_coord]
-                    f_init = f[u_coord + 1, v_coord]
-                    g_init = g[u_coord + 1, v_coord]
-                    sigma_init = sigma[u_coord + 1, v_coord]
-                    w_init = w[u_coord + 1, v_coord]
-
-                    d_init = d[u_coord + 1, v_coord]
-                    z_init = z[u_coord + 1, v_coord]
-
-                    if self.FullScalarFieldEvolution:
-                        if v_coord==0:
-                            dz_dv_init = 0.
-                        else:
-                            dz_dv_init = self.derivative('z', 'v', [u_coord + 1,
-                                v_coord] , order=1)
-                        other_variables = [d_init, z_init, dz_dv_init]
+                if info_dict['message']!='Integration successful.':
+                    print "-"*100
+                    print info_dict
+                    print "-"*100
+                    print "Failed at (u,v) = ", "(", U[u_coord, v_coord +
+                        1], ",", V[u_coord, v_coord + 1], ")"
+                    print "Indices = ", "(", u_coord, ",", v_coord + 1, ")"
+                    if data_dump_filename!=None:
+                        self.save_data(data_dump_filename)
                     else:
-                        if v_coord==0:
-                            dd_dv_init = 0.
-                        else:
-                            dd_dv_init = self.derivative('d', 'v', [u_coord + 1,
-                                v_coord], order=1)
-                        other_variables = [d_init, z_init, dd_dv_init]
+                        self.save_data("data_dump.hdf5")
+                    sys.exit(1)
 
-                    F = self.classical_source(V[u_coord + 1, v_coord])
+                r[u_coord + 1, v_coord + 1] = soln_u[1][0]
+                d[u_coord + 1, v_coord + 1] = soln_u[1][1]
+                z[u_coord + 1, v_coord + 1] = soln_u[1][2]
 
-                    v_init = V[u_coord + 1, v_coord]
-                    v_final = V[u_coord + 1, v_coord + 1]
+                # Integrate along v
 
-                    soln_v, info_dict = odeint(dX_dv, [r_init, f_init, g_init,
-                        sigma_init, w_init], [v_init, v_final],
-                        args=(other_variables, F, solver,), full_output=True)
+                r_init = r[u_coord + 1, v_coord]
+                f_init = f[u_coord + 1, v_coord]
+                g_init = g[u_coord + 1, v_coord]
+                sigma_init = sigma[u_coord + 1, v_coord]
+                w_init = w[u_coord + 1, v_coord]
 
-                    r_soln = soln_v[1][0]
-                    if r_soln < r_break:
-                        print "-"*100
-                        print "Breaking v loop"
-                        print "-"*100
-                        break
+                d_init = d[u_coord + 1, v_coord]
+                z_init = z[u_coord + 1, v_coord]
 
-                    if info_dict['message']!='Integration successful.':
-                        print "-"*100
-                        print info_dict
-                        print "-"*100
-                        print "Failed at (u,v) = ", "(", U[u_coord + 1, \
-                            v_coord], ",", V[u_coord + 1, v_coord], ")"
-                        print "Indices = ", "(", u_coord + 1, ",", v_coord, ")"
-                        if data_dump_filename!=None:
-                            self.save_data(data_dump_filename)
-                        else:
-                            self.save_data("data_dump.hdf5")
-                        sys.exit(1)
+                if v_coord==0:
+                    dz_dv_init = 0.
+                else:
+                    dz_dv_init = self.derivative('z', 'v', [u_coord + 1,
+                        v_coord] , order=1)
+                other_variables = [d_init, z_init, dz_dv_init]
 
-                    r[u_coord + 1, v_coord + 1] = soln_v[1][0]
-                    f[u_coord + 1, v_coord + 1] = soln_v[1][1]
-                    g[u_coord + 1, v_coord + 1] = soln_v[1][2]
-                    sigma[u_coord + 1, v_coord + 1] = soln_v[1][3]
-                    w[u_coord + 1, v_coord + 1] = soln_v[1][4]
+                F = self.classical_source(V[u_coord + 1, v_coord])
+
+                v_init = V[u_coord + 1, v_coord]
+                v_final = V[u_coord + 1, v_coord + 1]
+
+                soln_v, info_dict = odeint(dX_dv,
+                                  [r_init, f_init, g_init, sigma_init, w_init],
+                                  [v_init, v_final],
+                                  args=(other_variables, F,),
+                                  full_output=True)
+
+                r_soln = soln_v[1][0]
+                if r_soln < r_break:
+                    print "-"*100
+                    print "Breaking v loop"
+                    print "-"*100
+                    break
+
+                if info_dict['message']!='Integration successful.':
+                    print "-"*100
+                    print info_dict
+                    print "-"*100
+                    print "Failed at (u,v) = ", "(", U[u_coord + 1, \
+                        v_coord], ",", V[u_coord + 1, v_coord], ")"
+                    print "Indices = ", "(", u_coord + 1, ",", v_coord, ")"
+                    if data_dump_filename!=None:
+                        self.save_data(data_dump_filename)
+                    else:
+                        self.save_data("data_dump.hdf5")
+                    sys.exit(1)
+
+                r[u_coord + 1, v_coord + 1] = soln_v[1][0]
+                f[u_coord + 1, v_coord + 1] = soln_v[1][1]
+                g[u_coord + 1, v_coord + 1] = soln_v[1][2]
+                sigma[u_coord + 1, v_coord + 1] = soln_v[1][3]
+                w[u_coord + 1, v_coord + 1] = soln_v[1][4]
 
     def derivative(self, var_symbol, direction, coords=None, order=1, der=1):
         U = self.U; V = self.V

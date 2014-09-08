@@ -19,7 +19,7 @@
 # this program.  If not, see <http://www.gnu.org/licenses/>.
 
 import numpy as np
-import GRScalar_test
+import GRScalar
 from scipy.interpolate import splrep, splev
 import h5py
 
@@ -52,14 +52,9 @@ def source(V): return splev(V, Mass_tck, der=1)
 def phi(V): return 0.
 
 # Data file name
-#data_file = "collapse_with_backreaction_PP_scheme_eps_0.001_alpha_0.1_V_300_u_750_sigma_zero.hdf5"
-#data_file = "classical_collapse_PP_scheme_V_1000_u_750.hdf5"
-data_file = \
-"test4_with_Leps_eps_0.001_1.hdf5"
-#"backreaction_without_L_eps_M0_10.hdf5"
-#"backreaction_with_L_eps_sign_changed_test_eps_0.001_alpha_0.2.hdf5"
+data_file = "data.h5"
 
-system = GRScalar_test.System(u, V,
+system = GRScalar.System(u, V,
     alpha=alpha, FullScalarFieldEvolution=EvolveScalarField, 
     classical_source=source, scalar_field=phi)
 
