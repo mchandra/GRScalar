@@ -7,8 +7,6 @@ from scipy.integrate import odeint
 
 #--------------------ALL PARAMETERS DEFINED HERE-------------------------------#
 # Mass
-#M0 = 10. + 0.5944099 + 0.095610 + 0.01537 + 0.002459 + 0.00042 + 0.2 - 0.025 + \
-#0.001 - 0.001# Total mass, eps = 1e-3, alpha = 0.1
 M0 = 10.
 v_c = 15.
 delta = 0.1
@@ -19,7 +17,7 @@ def Mass(V):
 
 # L_eps parameters
 alpha = 0.1
-eps = 0.001
+eps = 0.1
 beta = 1.
 b = 1.
 
@@ -33,13 +31,14 @@ v1 = np.arange(v_i, v_c - 4*delta, dv)
 v2 = np.arange(v_c - 4*delta, v_c + 4*delta - dv/100., dv/100.)
 v3 = np.arange(v_c + 4*delta, v_f, dv)
 V = np.concatenate((v1, v2, v3))
+#V = np.arange(v_i, v_f, dv)
 
 # Refine in U near the expected classical horizon
 horizon = v_c - 4*M0
-U1 = np.arange(-100, -26, 0.1)
-U2 = np.arange(-26, -24, 0.0005)
-U3 = np.arange(-24, -20, 0.1)
-U = np.concatenate([U1, U2, U3])
+#U1 = np.arange(-100, -26, 0.1)
+#U2 = np.arange(-26, -24, 0.0005)
+#U3 = np.arange(-24, -20, 0.1)
+#U = np.concatenate([U1, U2, U3])
 U = np.arange(-100, -24, 0.05/16.)
 u = U
 
@@ -62,10 +61,9 @@ u_array = []
 def dX_dU(y, u, sigma_tck=None):
     r = y[0]
     f = y[1]
-    d = y[2]
-    z = y[3]
-    g = y[4]
-    M = y[5]
+    g = y[2]
+    h = y[3]
+    k = y[4]
 
     # Put sigma to a constant, equal to the value at (u_f, v_i). Hence it's
     # derivatives with respect to U are zero. Now since w = 2*dsigma_dU + dA_dU
@@ -74,71 +72,39 @@ def dX_dU(y, u, sigma_tck=None):
     dA_du = A(u, 1)
     d2A_du2 = A(u, 2)
 
-    if sigma_tck==None:
-        sigma = 0.
-        dsigma_du = 0.
-        d2sigma_du2 = 0.
-    else:
-        sigma = splev(u, sigma_tck)
-        dsigma_du = splev(u, sigma_tck, der=1)
-        d2sigma_du2 = splev(u, sigma_tck, der=2)
-
-    dsigma_dU = dsigma_du
-    d2sigma_dU2 = d2sigma_du2
-
-    w = 2*dsigma_dU + dA_du
-    dw_dU = 2*d2sigma_dU2 + d2A_du2
-
-    T_UU = alpha*(w**2/4. + dw_dU/2. - w*dsigma_dU)
-    T_UV =  -alpha*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
-
+    sigma = 0.
+    I = 0.
+    J = 0.
 
     dr_du = f
-    df_du = 2*f*dsigma_dU -alpha*(0.25*w**2 + 0.5*dw_dU)/r
-    dd_du = (f*g + np.exp(2*sigma)/4.)/(r**2*(1 - alpha/r**2))
-    dz_du = 2*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
-    dg_du = -(f*g + np.exp(2*sigma)/4.)/(r*(1 - alpha/r**2))
-    dM_du = (2*np.exp(-2*sigma)*f*T_UV - 2*np.exp(-2*sigma)*g*T_UU)
-    if sigma_tck==None:
-        dM_du_array.append(dM_du)
-        u_array.append(u)
 
-    return [dr_du, df_du, dd_du, dz_du, dg_du, dM_du]
+    df_du = 2*f*I - alpha/r*(J - I**2. + d2A_du2 + dA_du**2.)
 
-r0 = (v_i - U[-1])/2.; f0 = -0.5
-d0 = 0; z0 = 0.
-g0 = 0.5; Minit = 0.
-y0 = [r0, f0, d0, z0, g0, Minit]
-soln = odeint(dX_dU, y0, u[::-1], hmax=0.1, mxstep=5000)
-M_U_axis = soln[::-1, 5]
-r_old = soln[::-1, 0]; f_old = soln[::-1, 1]
-d_old = soln[::-1, 2]; z_old = soln[::-1, 3]
-g_old = soln[::-1, 4]; M_old = soln[::-1, 5]
+    dg_du = -(r/(r**2.- alpha))*(f*g + np.exp(2*sigma)/4.)
 
-M_U_axis_tck = splrep(u, M_U_axis)
+    dh_du = (1./(r**2.-alpha))*(f*g + np.exp(2*sigma)/4.) 
 
-def dX1_dU(y, u):
-    r = y[0]
-    sigma = y[1]
+    df_dv = dg_du
+    dg_dv = 2*g*h - alpha/r*(k - h**2.)
+    dk_du =   (-2.*g/(r**2.-alpha)**2.)*(f*g + np.exp(2*sigma)/4.) + (1./(r**2.-alpha))*(df_dv*g + f*dg_dv + np.exp(2*sigma)*h/2.)
 
-    mass = splev(u, M_U_axis_tck)
+    return [dr_du, df_du, dg_du, dh_du, dk_du]
 
-    dr_du = -0.5 * (1 - 2*mass/r)
-    dsigma_du = -mass/(2 * r**2)
+r0 = (v_i - U[0])/2.
+f0 = -0.5
+g0 = 0.5
+h0 = 0.
+k0 = 0.
+y0 = [r0, f0, g0, h0, k0]
+soln = odeint(dX_dU, y0, u, hmax=0.1, mxstep=5000)
+r_U_axis = soln[:, 0]; f_U_axis = soln[:, 1]
+g_U_axis = soln[:, 2]; h_U_axis = soln[:, 3]
+k_U_axis = soln[:, 4]
+sigma_U_axis = np.zeros(u.size)
+I_U_axis = np.zeros(u.size)
+J_U_axis = np.zeros(u.size)
 
-    return [dr_du, dsigma_du]
-
-r0 = (v_i - U[-1])/2.; sigma0 = 0.
-y0 = [r0, sigma0]
-soln = odeint(dX1_dU, y0, u[::-1], hmax=0.1, mxstep=5000)
-sigma_U_axis = 0.*soln[::-1, 1]
-sigma_U_axis_tck = splrep(u, sigma_U_axis)
-
-y0 = [r0, f0, d0, z0, g0, Minit]
-soln = odeint(dX_dU, y0, u[::-1], hmax=0.1, mxstep=5000, args=(sigma_U_axis_tck,))
-r_U_axis = soln[::-1, 0]; f_U_axis = soln[::-1, 1]
-d_U_axis = soln[::-1, 2]; z_U_axis = soln[::-1, 3]
-g_U_axis = soln[::-1, 4]; M_U_axis = soln[::-1, 5]
+# Setting first a choice for sigma(u0, v)
 
 # Mass function
 quantum_mass = r_U_axis/2.*(1 + 4*np.exp(-2*sigma_U_axis)*f_U_axis*g_U_axis)
@@ -146,7 +112,7 @@ classical_mass = Mass(V)
 total_mass = classical_mass + quantum_mass[0]
 total_mass_tck = splrep(V, total_mass)
 
-def dX1_dV(y, V):
+def dX_dV(y, V):
     r = y[0]
     sigma = y[1]
 
@@ -157,50 +123,60 @@ def dX1_dV(y, V):
 
     return [dr_dV, dsigma_dV]
 
-r0 = r_U_axis[0]; sigma0 = sigma_U_axis[0]; y0 = [r0, sigma0]
-soln = odeint(dX1_dV, y0, V, hmax=0.1, mxstep=5000)
+r0 = r_U_axis[0]; sigma0 = sigma_U_axis[0]
+y0 = [r0, sigma0]
+soln = odeint(dX_dV, y0, V, hmax=0.1, mxstep=5000)
 sigma_V_axis = soln[:, 1]
 sigma_V_axis_tck = splrep(V, sigma_V_axis)
 
-def dX2_dV(y, V):
-    r = y[0]
-    g = y[1]
-    f = y[2]
-    w = y[3]
-    M = y[4]
+# Now integrate everything else using the above sigma
 
-    dB_dV = 0.
-    d2B_dV2 = 0.
+def dX_dV(y, V):
+    r = y[0]
+    f = y[1]
+    g = y[2]
+    I = y[3]
+    J = y[4]
 
     sigma = splev(V, sigma_V_axis_tck)
-    d = splev(V, sigma_V_axis_tck, 1)
-    dd_dV = splev(V, sigma_V_axis_tck, 2)
-    z = 2*d + dB_dV
-    dz_dV = 2*dd_dV + d2B_dV2
+    h = splev(V, sigma_V_axis_tck, 1)
+    k = splev(V, sigma_V_axis_tck, 2)
 
     F = splev(V, total_mass_tck, der=1)
 
-    T_VV = alpha*(z**2/4. + dz_dV/2. - z*d) + F
-    T_UV =  -alpha*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
+    dA_du = A(U[0], 1)
+    d2A_du2 = A(U[0], 2)
 
-    dr_dV = g
-    dg_dV = 2*d*g - F/r - alpha*(0.25*z**2 + 0.5*dz_dV - z*d)/r
-    df_dV = -(f*g + np.exp(2*sigma)/4.)/(r*(1 - alpha/r**2))
-    dw_dV = 2*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
-    dM_dV = 2*np.exp(-2*sigma)*g*T_UV - 2*np.exp(-2*sigma)*f*T_VV
-#    print "V = ", V
-#    print "r = ", r
-#    print "r - alpha/r = ", r - alpha/r
-#    print "r**2 - alpha = ", r**2 - alpha
+    df_du = 2*f*I - alpha/r*(J - I**2. + d2A_du2 + dA_du**2.)
 
-    return [dr_dV, dg_dV, df_dV, dw_dV, dM_dV]
+    dr_dv = g
 
-r0 = r_U_axis[0]; g0 = g_U_axis[0]; f0 = f_U_axis[0]; w0 = 0.; Minit = quantum_mass[0]
-y0 = [r0, g0, f0, w0, Minit]
-soln = odeint(dX2_dV, y0, V, hmax=0.1, mxstep=5000)
-r_V_axis = soln[:, 0]; g_V_axis = soln[:, 1]
-f_V_axis = soln[:, 2]; w_V_axis = soln[:, 3]
-M_V_axis = soln[:, 4]
+    dg_du = -(r/(r**2.- alpha))*(f*g + np.exp(2*sigma)/4.)
+    df_dv = dg_du
+
+    dg_dv = 2*g*h - F/r - alpha/r*(k - h**2.)
+
+    dI_dv = (1./(r**2.-alpha))*(f*g + np.exp(2*sigma)/4.) # = dH_du
+
+    dJ_dv =   (-2.*f/(r**2.-alpha)**2.)*(f*g + np.exp(2*sigma)/4.) + (1./(r**2.-alpha))*(df_du*g + f*dg_du + np.exp(2*sigma)*I/2.)
+
+    return [dr_dv, df_dv, dg_dv, dI_dv, dJ_dv]
+
+r0 = r_U_axis[0]
+f0 = f_U_axis[0]
+g0 = g_U_axis[0]
+I0 = I_U_axis[0]
+J0 = J_U_axis[0]
+y0 = [r0, f0, g0, I0, J0]
+soln = odeint(dX_dV, y0, V, hmax=0.1, mxstep=5000)
+r_V_axis = soln[:, 0]
+f_V_axis = soln[:, 1]
+g_V_axis = soln[:, 2]
+I_V_axis = soln[:, 3]
+J_V_axis = soln[:, 4]
+sigma_V_axis = splev(V, sigma_V_axis_tck)
+h_V_axis = splev(V, sigma_V_axis_tck, 1)
+k_V_axis = splev(V, sigma_V_axis_tck, 2)
 
 datafile = h5py.File('initial_data.hdf5', 'w')
 datafile['alpha'] = np.array([alpha])
@@ -209,29 +185,24 @@ datafile['u'] = u
 datafile['V'] = V
 datafile['u_i'] = U[0]
 datafile['v_i'] = v_i
+
 datafile['r_V_axis'] = r_V_axis
 datafile['f_V_axis'] = f_V_axis
 datafile['g_V_axis'] = g_V_axis
-datafile['sigma_V_axis'] = splev(V, sigma_V_axis_tck)
-datafile['d_V_axis'] = splev(V, sigma_V_axis_tck, der=1)
-datafile['w_V_axis'] = w_V_axis
-datafile['z_V_axis'] = 2*splev(V, sigma_V_axis_tck, der=1)
-datafile['classical_mass_V_axis'] = Mass(V)
+datafile['sigma_V_axis'] = sigma_V_axis
+datafile['h_V_axis'] = h_V_axis
+datafile['k_V_axis'] = k_V_axis
+datafile['I_V_axis'] = I_V_axis
+datafile['J_V_axis'] = J_V_axis
+
 datafile['r_U_axis'] = r_U_axis
 datafile['f_U_axis'] = f_U_axis
 datafile['g_U_axis'] = g_U_axis
 datafile['sigma_U_axis'] = sigma_U_axis
-datafile['d_U_axis'] = d_U_axis
-datafile['w_U_axis'] = A(u, 1)
-datafile['z_U_axis'] = z_U_axis
-datafile['M_U_axis'] = M_U_axis
-datafile['M_V_axis'] = M_V_axis
-datafile['quantum_mass'] = quantum_mass
-datafile['r_old'] = r_old
-datafile['f_old'] = f_old
-datafile['d_old'] = d_old
-datafile['g_old'] = g_old
-datafile['M_old'] = M_old
+datafile['h_U_axis'] = h_U_axis
+datafile['k_U_axis'] = k_U_axis
+datafile['I_U_axis'] = I_U_axis
+datafile['J_U_axis'] = J_U_axis
+
+datafile['classical_mass_V_axis'] = Mass(V)
 datafile.close()
-np.savetxt('dM_du_array.dat', dM_du_array)
-np.savetxt('u_array.dat', u_array)

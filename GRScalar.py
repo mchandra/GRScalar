@@ -22,14 +22,13 @@
 import sys
 import numpy as np
 from scipy.integrate import odeint
-from scipy.interpolate import splrep, splev, interp1d
+from scipy.interpolate import splrep, splev
 import h5py
 
 class System:
     def __init__(self, U=None, V=None, 
-        classical_source=None, scalar_field=None,
-        alpha=0, FullScalarFieldEvolution=0, 
-        data_file=None):
+        F_tck=None, A_tck=None,
+        alpha=0, data_file=None):
 
         if data_file==None:
 
@@ -38,17 +37,9 @@ class System:
                 sys.exit(1)
 
             self.alpha = alpha
-            self.FullScalarFieldEvolution = FullScalarFieldEvolution
 
-            if classical_source==None:
-                self.classical_source = lambda x: 0
-            else:
-                self.classical_source = classical_source
-
-            if scalar_field==None:
-                self.scalar_field = lambda x: 0
-            else:
-                self.scalar_field = scalar_field
+            self.F_tck = F_tck
+            self.A_tck = A_tck
 
             if len(U.shape) < 2 or len(V.shape) < 2:
                 V, U = np.meshgrid(V, U)
@@ -58,18 +49,14 @@ class System:
             self.v_i = V[0, 0]; self.v_f = V[0, -1]
             self.Nu = U.shape[0]; self.Nv = V.shape[1]
 
-            # Array initialization
-            # r = r(u, v), f = dr/du, g = dr/dv
-            # sigma = sigma(u, v), d = dsigma/dv
-            # phi = phi(u, v), w = dphi/du, z = dphi/dv
-
             self.r = np.zeros([self.Nu, self.Nv])
+            self.sigma = np.zeros([self.Nu, self.Nv])
             self.f = np.zeros([self.Nu, self.Nv])
             self.g = np.zeros([self.Nu, self.Nv])
-            self.sigma = np.zeros([self.Nu, self.Nv])
-            self.d = np.zeros([self.Nu, self.Nv])
-            self.w = np.zeros([self.Nu, self.Nv])
-            self.z = np.zeros([self.Nu, self.Nv])
+            self.h = np.zeros([self.Nu, self.Nv])
+            self.I = np.zeros([self.Nu, self.Nv])
+            self.J = np.zeros([self.Nu, self.Nv])
+            self.k = np.zeros([self.Nu, self.Nv])
 
         else:
 
@@ -81,21 +68,20 @@ class System:
             self.Nu = self.U.shape[0]; self.Nv = self.V.shape[1]
 
             self.r = saved_data['r'][:]
+            self.sigma = saved_data['sigma'][:]
             self.f = saved_data['f'][:]
             self.g = saved_data['g'][:]
-            self.sigma = saved_data['sigma'][:]
-            self.d = saved_data['d'][:]
-            self.w = saved_data['w'][:]
-            self.z = saved_data['z'][:]
+            self.h = saved_data['h'][:]
+            self.I = saved_data['I'][:]
+            self.J = saved_data['J'][:]
+            self.k = saved_data['k'][:]
 
-            source_array = saved_data['source_array'][:]
-            scalar_field_array = saved_data['scalar_field_array'][:]
-            self.classical_source = interp1d(self.V[0, :], source_array)
-            self.scalar_field = interp1d(self.V[0, :], scalar_field_array)
+            F_array = saved_data['F_array'][:]
+            A_array = saved_data['A_array'][:]
+            self.F_tck = splrep(self.V[0, :], F_array)
+            self.A_tck = splrep(self.U[:, 0], A_array)
 
             self.alpha = saved_data['alpha'].value
-            self.FullScalarFieldEvolution = \
-                saved_data['FullScalarFieldEvolution'].value
 
             print "Loaded data file."
 
@@ -104,53 +90,88 @@ class System:
 
         alpha = self.alpha
         r = y[0]
+        sigma = y[1]
+        f = y[2]
+        g = y[3]
+        h = y[4]
+        I = y[5]
+        k = y[6]
 
-        f = other_variables[0]
-        g = other_variables[1]
-        sigma = other_variables[2]
+        v = other_variables[0]
+        J = other_variables[1]
+        F = splev(v, self.F_tck)
+        d2A_du2 = splev(u, self.A_tck, 2)
+        dA_du = splev(u, self.A_tck, 1)
 
         dr_du = f
 
-        dd_du = (f*g + np.exp(2*sigma)/4.)*(r**2. - alpha)
+        dsigma_du = I
 
-        dz_du = 2*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
+        df_du = 2*f*I - alpha/r*(J - I**2. + d2A_du2 + dA_du**2.)
 
-        return [dr_du, dd_du, dz_du]
+        dg_du = -(r/(r**2.- alpha))*(f*g + exp(2*sigma)/4.)
+
+        dh_du = (1./(r**2.-alpha))*(f*g + np.exp(2*sigma)/4.) 
+
+        dI_du = J
+
+        df_dv = dg_du
+
+        dg_dv = 2*g*h - F/r - alpha/r*(k - h**2.)
+
+        dk_du =   (-2.*g/(r**2.-alpha)**2.)*(f*g + np.exp(2*sigma)/4.) 
+                + (1./(r**2.-alpha))*(df_dv*g + f*dg_dv + np.exp(2*sigma)*h/2.)
+
+        return [dr_du, dsigma_du, df_du, dg_du, dh_du, dI_du, dk_du]
 
     def dX_dv(self, y, v, other_variables, classical_source, solver):
 
         alpha = self.alpha
         r = y[0]
-        f = y[1]
-        g = y[2]
-        sigma = y[3]
+        sigma = y[1]
+        f = y[2]
+        g = y[3]
+        h = y[4]
+        I = y[5]
+        J = y[6]
 
-        d = other_variables[0]
-        z = other_variables[1]
-        dz_dv = other_variables[2]
-        F = classical_source
+        u = other_variables[0]
+        k = other_variables[1]
+        F = splev(v, self.F_tck)
+        d2A_du2 = splev(u, self.A_tck, 2)
+        dA_du = splev(u, self.A_tck, 1)
+
+        df_du = 2*f*I - alpha/r*(J - I**2. + d2A_du2 + dA_du**2.)
+
+        dg_du = -(r/(r**2.- alpha))*(f*g + exp(2*sigma)/4.)
 
         dr_dv = g
 
-        df_dv = (-f*g/r - np.exp(2*sigma)/(4*r))*(1/(1 - alpha/r**2))
+        dsigma_dv = h
 
-        dg_dv = 2*d*g - F/r - alpha*(z**2/4. + dz_dv/2. - z*d)/r
+        df_dv = dg_du
 
-        dsigma_dv = d
+        dg_dv = 2*g*h - F/r - alpha/r*(k - h**2.)
 
-        dw_dv = 2*(f*g + np.exp(2*sigma)/4.)/(r**2 - alpha)
+        dh_dv = k
 
-        return [dr_dv, df_dv, dg_dv, dsigma_dv, dw_dv]
+        dI_dv = (1./(r**2.-alpha))*(f*g + np.exp(2*sigma)/4.) # = dH_du
+
+        dJ_dv =   (-2.*f/(r**2.-alpha)**2.)*(f*g + np.exp(2*sigma)/4.) 
+                + (1./(r**2.-alpha))*(df_du*g + f*dg_du + np.exp(2*sigma)*I/2.)
+        
+
+        return [dr_dv, dsigma_dv, df_dv, dg_dv, dh_dv, dI_dv, dJ_dv]
 
     def integrate(self, r_break=0, data_dump_filename=None):
         r = self.r
-        d = self.d
-        z = self.z
-
+        sigma = self.sigma
         f = self.f
         g = self.g
-        sigma = self.sigma
-        w = self.w
+        h = self.h
+        I = self.I
+        J = self.J
+        k = self.k
 
         U = self.U; V = self.V
         Nu = self.Nu; Nv = self.Nv
@@ -165,20 +186,23 @@ class System:
                 # Integrate along u
 
                 r_init = r[u_coord, v_coord + 1]
-                d_init = d[u_coord, v_coord + 1]
-                z_init = z[u_coord, v_coord + 1]
-
+                sigma_init = sigma[u_coord, v_coord + 1]
                 f_init = f[u_coord, v_coord + 1]
                 g_init = g[u_coord, v_coord + 1]
-                sigma_init = sigma[u_coord, v_coord + 1]
+                h_init = r[u_coord, v_coord + 1]
+                I_init = sigma[u_coord, v_coord + 1]
+                J_init = f[u_coord, v_coord + 1]
+                k_init = g[u_coord, v_coord + 1]
 
-                other_variables = [f_init, g_init, sigma_init]
+                init = [r_init, sigma_init, f_init, g_init, h_init, I_init,
+                        k_init]
+                other_variables = [v, J_init]
 
                 u_init = U[u_coord, v_coord + 1]
                 u_final = U[u_coord + 1, v_coord + 1]
 
                 soln_u, info_dict = odeint(dX_du,
-                                           [r_init, d_init, z_init],
+                                           init,
                                            [u_init, u_final],
                                            args=(other_variables,),
                                            full_output=True)
@@ -196,45 +220,29 @@ class System:
                         self.save_data("data_dump.hdf5")
                     sys.exit(1)
 
-                r[u_coord + 1, v_coord + 1] = soln_u[1][0]
-                d[u_coord + 1, v_coord + 1] = soln_u[1][1]
-                z[u_coord + 1, v_coord + 1] = soln_u[1][2]
-
                 # Integrate along v
 
                 r_init = r[u_coord + 1, v_coord]
+                sigma_init = sigma[u_coord + 1, v_coord]
                 f_init = f[u_coord + 1, v_coord]
                 g_init = g[u_coord + 1, v_coord]
-                sigma_init = sigma[u_coord + 1, v_coord]
-                w_init = w[u_coord + 1, v_coord]
+                h_init = h[u_coord + 1, v_coord]
+                I_init = I[u_coord + 1, v_coord]
+                J_init = J[u_coord + 1, v_coord]
+                k_init = k[u_coord + 1, v_coord]
 
-                d_init = d[u_coord + 1, v_coord]
-                z_init = z[u_coord + 1, v_coord]
-
-                if v_coord==0:
-                    dz_dv_init = 0.
-                else:
-                    dz_dv_init = self.derivative('z', 'v', [u_coord + 1,
-                        v_coord] , order=1)
-                other_variables = [d_init, z_init, dz_dv_init]
-
-                F = self.classical_source(V[u_coord + 1, v_coord])
+                init = [r_init, sigma_init, f_init, g_init, h_init, I_init,
+                        J_init]
+                other_variables = [u, k_init]
 
                 v_init = V[u_coord + 1, v_coord]
                 v_final = V[u_coord + 1, v_coord + 1]
 
                 soln_v, info_dict = odeint(dX_dv,
-                                  [r_init, f_init, g_init, sigma_init, w_init],
+                                  init,
                                   [v_init, v_final],
-                                  args=(other_variables, F,),
+                                  args=(other_variables,),
                                   full_output=True)
-
-                r_soln = soln_v[1][0]
-                if r_soln < r_break:
-                    print "-"*100
-                    print "Breaking v loop"
-                    print "-"*100
-                    break
 
                 if info_dict['message']!='Integration successful.':
                     print "-"*100
@@ -249,208 +257,40 @@ class System:
                         self.save_data("data_dump.hdf5")
                     sys.exit(1)
 
-                r[u_coord + 1, v_coord + 1] = soln_v[1][0]
-                f[u_coord + 1, v_coord + 1] = soln_v[1][1]
-                g[u_coord + 1, v_coord + 1] = soln_v[1][2]
-                sigma[u_coord + 1, v_coord + 1] = soln_v[1][3]
-                w[u_coord + 1, v_coord + 1] = soln_v[1][4]
+                r[u_coord + 1, v_coord + 1] = 0.5*(soln_u[1][0] + soln_v[1][0])
+                sigma[u_coord + 1, v_coord + 1] = 
+                                            0.5*(soln_u[1][1] + soln_v[1][1])
+                f[u_coord + 1, v_coord + 1] = 0.5*(soln_u[1][2] + soln_v[1][2])
+                g[u_coord + 1, v_coord + 1] = 0.5*(soln_u[1][3] + soln_v[1][3])
+                h[u_coord + 1, v_coord + 1] = 0.5*(soln_u[1][4] + soln_v[1][4])
+                I[u_coord + 1, v_coord + 1] = 0.5*(soln_u[1][5] + soln_v[1][5])
+                J[u_coord + 1, v_coord + 1] = soln_v[1][6]
+                k[u_coord + 1, v_coord + 1] = soln_u[1][6]
 
-    def derivative(self, var_symbol, direction, coords=None, order=1, der=1):
-        U = self.U; V = self.V
-
-        r = self.r
-        f = self.f
-        g = self.g
-        sigma = self.sigma
-        d = self.d
-        w = self.w
-        z = self.z
-
-        variables = {'r' : r, 'f' : f, 'g' : g, 'sigma' : sigma, 'd' : d, 'w' :
-            w, 'z' : z}
-
-        var = variables[var_symbol]
-
-        if coords!=None:
-            u_coord = coords[0]; v_coord = coords[1]
-
-            if direction=='v':
-
-                if v_coord==0:
-                    print "Derivative in the direction of v at v=0 is not \
-                        known."
-                    print "Please provide boundary data for the derivative."
-                    sys.exit(1)
-
-                if v_coord <=3:
-                    tck, fp, ierr, msg = splrep(V[u_coord, :4], var[u_coord,
-                        :4], k=1, full_output=True)
-
-                    if ierr > 0:
-                        print "Error in spline representation used for \
-                            derivative calculation"
-                        sys.exit(1)
-
-                    return splev(V[u_coord, v_coord], tck, der=der)
-
-                tck, fp, ierr, msg = splrep(V[u_coord, v_coord-4:v_coord],
-                    var[u_coord, v_coord-4:v_coord], k=order, full_output=True)
-
-                if ierr > 0:
-                    print "Error in spline representation used for derivative \
-                        calculation"
-                    sys.exit(1)
-
-                return splev(V[u_coord, v_coord], tck, der=der)
-
-            if direction=='u':
-
-                if u_coord==0:
-                    print "Derivative in the direction of u at u=0 is not \
-                        known."
-                    print "Please provide boundary data for the derivative."
-                    sys.exit(1)
-
-                if u_coord <=3:
-                    tck, fp, ierr, msg = splrep(U[:4, v_coord], var[u_coord,
-                        :4], k=1, full_output=True)
-
-                    if ierr > 0:
-                        print "Error in spline representation used for \
-                            derivative calculation"
-                        sys.exit(1)
-
-                    return splev(U[u_coord, v_coord], tck, der=der)
-
-                tck, fp, ierr, msg = splrep(U[u_coord-4:u_coord, v_coord],
-                    var[u_coord-4:u_coord, v_coord], k=order, full_output=True)
-
-                if ierr > 0:
-                    print "Error in spline representation used for derivative \
-                        calculation"
-                    sys.exit(1)
-
-                return splev(U[u_coord, v_coord], tck, der=der)
-
-        elif coords==None:
-
-            if direction=='v':
-                dvar_dv = np.zeros([self.Nu, self.Nv])
-                for u_coord in xrange(self.Nu):
-                    tck, fp, ierr, msg = splrep(V[u_coord, :], var[u_coord, :],
-                        k=order, full_output=True)
-
-                    if ierr > 0:
-                        print "Error in spline representation used for \
-                            derivative calculation"
-                        sys.exit(1)
-
-                    dvar_dv[u_coord, :] = splev(V[u_coord, :], tck, der=der)
-
-                return dvar_dv
-
-            if direction=='u':
-                dvar_du = np.zeros([self.Nu, self.Nv])
-                for v_coord in xrange(self.Nv):
-                    tck, fp, ierr, msg = splrep(U[:, v_coord], var[:, v_coord],
-                        k=order, full_output=True)
-
-                    if ierr > 0:
-                        print "Error in spline representation used for \
-                            derivative calculation"
-                        sys.exit(1)
-
-                    dvar_du[:, v_coord] = splev(U[:, v_coord], tck, der=der)
-
-                return dvar_du
-
-    def constraint(self, order=1):
-        r = self.r
-        f = self.f
-        w = self.w
-        alpha = self.alpha
-
-        df_du = self.derivative('f', 'u', order=order)
-        dsigma_du = self.derivative('sigma', 'u', order=order)
-
-        if alpha==0:
-            C1 = df_du - 2*f*dsigma_du
-
-            return C1
-
-        if self.FullScalarFieldEvolution:
-            dw_du = self.derivative('w', 'u', order=order)
-
-            C1 = df_du - 2*f*dsigma_du + alpha*(w**2/4. + dw_du/2. -
-                w*dsigma_du)/r
-            return C1
-        else:
-            dsigma_duu = self.derivative('sigma', 'u', order=order, der=2)
-
-            C1 = df_du - 2*f*dsigma_du + alpha*(dsigma_duu - dsigma_du**2)/r
-            return C1
-
-    def Ricci_scalar(self, order=1):
-        r = self.r
-        f = self.f
-        g = self.g
-        sigma = self.sigma
-
-        df_dv = self.derivative('f', 'v', order=order)
-        dd_du = self.derivative('d', 'u', order=order)
-
-        R = -np.exp(-2*sigma)*(16*r*df_dv + 8*r**2*dd_du + 8*f*g +
-                2*np.exp(2*sigma))/r**2
-
-        return R
-
-    def quantum_stress_energy_tensor(self, i, j, order=1):
-        alpha = self.alpha
-        r = self.r
-        f = self.f
-        g = self.g
-        sigma = self.sigma
-        d = self.d
-        w = self.w
-        z = self.z
-
-        if i=='u' and j=='u':
-
-            dw_du = self.derivative('w', 'u', order=order)
-            dsigma_du = self.derivative('sigma', 'u', order=order)
-
-            return (w**2/4. + dw_du/2. - w*dsigma_du)/(4*np.pi*r**2)
-
-        if i=='v' and j=='v':
-
-            dz_dv = self.derivative('z', 'v', order=order)
-
-            return (z**2/4. + dz_dv/2. - z*d)/(4*np.pi*r**2)
-
-        if (i=='u' and j=='v') or (i=='v' and j=='u'):
-
-            return -(f*g + np.exp(2*sigma)/4.)/(4*np.pi*r**2*(r**2 -
-                alpha))
+                if r[u_coord+1, v_coord+1] < r_break:
+                    print "-"*100
+                    print "Breaking v loop"
+                    print "-"*100
+                    break
 
     def save_data(self, filename):
         U = self.U; V = self.V
-        source_array = self.classical_source(V[0, :])
-        scalar_field_array = self.scalar_field(V[0, :])
+        F_array = splev(V[0, :], F_tck)
+        A_array = splev(U[:, 0], A_tck)
         alpha = self.alpha
-        FullScalarFieldEvolution = self.FullScalarFieldEvolution
         r = self.r
+        sigma = self.sigma
         f = self.f
         g = self.g
-        sigma = self.sigma
-        d = self.d
-        w = self.w
-        z = self.z
+        h = self.h
+        I = self.I
+        J = self.J
+        k = self.k
 
-        variables = [U, V, source_array, scalar_field_array, alpha,
-            FullScalarFieldEvolution, r, f, g, sigma, d, w, z]
-        variable_names = ['U', 'V', 'source_array', 'scalar_field_array',
-            'alpha', 'FullScalarFieldEvolution', 'r', 'f', 'g', 'sigma','d',
-            'w', 'z']
+        variables = [U, V, F_array, A_array, alpha,
+                     r, sigma, f, g, h, I, J, k]
+        variable_names = ['U', 'V', 'F_array', 'A_array',
+                          'alpha', 'r', 'sigma', 'f', 'g', 'h', 'I', 'J', 'k']
 
         datafile = h5py.File(filename, 'w')
         for var, i in enumerate(variable_names):

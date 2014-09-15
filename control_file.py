@@ -29,9 +29,6 @@ initial_data = h5py.File('initial_data.hdf5', 'r')
 # Quantum length scale
 alpha = initial_data['alpha'][:][0]
 
-# Full scalar field evolution ?
-EvolveScalarField = 1
-
 # Grid generation
 u = initial_data['u'][:]
 V = initial_data['V'][:]
@@ -48,15 +45,12 @@ Mass_tck = splrep(V, Mass)
 
 def source(V): return splev(V, Mass_tck, der=1)
 
-# Parameters for scalar field boundary condition
-def phi(V): return 0.
-
 # Data file name
 data_file = "data.h5"
 
 system = GRScalar.System(u, V,
-    alpha=alpha, FullScalarFieldEvolution=EvolveScalarField, 
-    classical_source=source, scalar_field=phi)
+    alpha=alpha,
+    classical_source=source)
 
 system.r[0, :] = initial_data['r_V_axis'][:]
 system.f[0, :] = initial_data['f_V_axis'][:]
